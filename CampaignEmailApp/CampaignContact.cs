@@ -1,12 +1,28 @@
-﻿namespace CampaignEmailApp
+﻿/*
+ * CampaignList Durable Function helper class.
+ */
+namespace CampaignEmailApp
 {
-    internal class CampaignContact
+    /// <summary>
+    /// Campaign contact information class used to pass campaign and member contact
+    /// data to CampaignMailer Azure functions.
+    /// </summary>
+    public class CampaignContact
     {
-        private string fullName;
-        private string emailAddress;
+        public string FullName { get; set; }
 
-        public string FullName { get => fullName; set => fullName = value; }
+        public string EmailAddress { get; set; }
 
-        public string EmailAddress { get => emailAddress; set => emailAddress = value; }
+        public string SenderEmailAddress { get; set; }
+
+        public string ReplyToEmailAddress { get; set; }
+
+        public string ReplyToDisplayName { get; set; }
+
+        public string MessageSubject { get; set; }
+
+        public string MessageBodyHtml { get; set; }
+
+        public string MessageBodyPlainText { get; set; }
     }
 }
