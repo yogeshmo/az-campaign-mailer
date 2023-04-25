@@ -14,6 +14,8 @@ namespace CampaignMailer
         // Application logger to log application status, messages, and errors
         private static ILogger logger;
 
+        private static string senderEmailAddress;
+
         public static void Initialize(ILogger appLogger)
         {
             // Keep the app logger for use in the methods
@@ -22,6 +24,9 @@ namespace CampaignMailer
             // Create the email client using the connection string in the function properties
             string connectionString = Environment.GetEnvironmentVariable("COMMUNICATION_SERVICES_CONNECTION_STRING");
             emailClient = new EmailClient(connectionString);
+
+            // Get the sender email address from the function properties
+            senderEmailAddress = Environment.GetEnvironmentVariable("SenderEmailAddress");
         }
 
         public static void SendMessage(CampaignContact campaignContact)
@@ -35,15 +40,19 @@ namespace CampaignMailer
                     Html = campaignContact.MessageBodyHtml
                 };
 
-                EmailMessage emailMessage = new(campaignContact.SenderEmailAddress, campaignContact.EmailAddress, emailContent);
+                EmailMessage emailMessage = new(senderEmailAddress, campaignContact.EmailAddress, emailContent);
 
                 // *********************TO BE REMOVED**************************
                 // Mark this email as ACS internal email to skip email delivery
                 emailMessage.Headers.Add("x-ms-acsemail-loadtest-skip-email-delivery", "ACS");
 
                 EmailSendOperation emailSendOp = emailClient.Send(WaitUntil.Started, emailMessage, CancellationToken.None);
-
                 logger.LogInformation($"Operation Id: {emailSendOp.Id}");
+
+            }
+            catch (RequestFailedException rfex)
+            {
+                logger.LogCritical($"Failed to deliver email to {campaignContact.EmailAddress} Request failed exception - {rfex}");
             }
             catch (Exception ex)
             {

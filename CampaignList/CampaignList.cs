@@ -7,7 +7,6 @@ using Microsoft.PowerPlatform.Dataverse.Client;
 using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Messages;
 using Microsoft.Xrm.Sdk.Query;
-using Microsoft.Azure.WebJobs.Extensions.ServiceBus;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
@@ -124,6 +123,8 @@ namespace CampaignList
                         queryXml = GetStaticQuery(listId);
                     }
 
+                    int contactCount = 0;
+
                     // Process each page of the list query results until every page has been processed
                     bool morePages = true;
                     while (morePages)
@@ -158,15 +159,16 @@ namespace CampaignList
                                 campaignContact.MessageSubject = campaignConfig.MsgSubject;
                                 campaignContact.MessageBodyHtml = campaignConfig.MsgBodyHtml;
                                 campaignContact.MessageBodyPlainText = campaignConfig.MsgBodyPlainText;
-                                campaignContact.SenderEmailAddress = campaignConfig.FromAddress;
 
                                 // Add contact to contact list
                                 pageContactList.Add(campaignContact);
                             }
                         }
 
+                        contactCount += pageContactList.Count;
+
                         // Start the new activity function and capture the task reference.
-                        await context.CallActivityAsync<string>("QueueContactsActivity", pageContactList);
+                        _ = context.CallActivityAsync<string>("QueueContactsActivity", pageContactList);
 
                         // Check for more records.
                         if (pageCollection.MoreRecords)
@@ -185,6 +187,7 @@ namespace CampaignList
                         }
                     }
 
+                    log.LogInformation($"Total number of contacts in the list: {contactCount}");
                     log.LogInformation($"Successfully completed processing {campaignConfig.ListName}");
                 }
                 else
@@ -211,7 +214,7 @@ namespace CampaignList
             [ActivityTrigger] List<CampaignContact> contactList, ILogger log)
         {
 
-            return contactList; 
+            return contactList;
         }
 
 
@@ -223,12 +226,10 @@ namespace CampaignList
         /// <returns></returns>
         [FunctionName("QueueContactsActivity")]
         public static void QueueContacts(
-            [ActivityTrigger] List<CampaignContact> contactList, 
-            [ServiceBus("q-sb-campaign-mailer", Connection = "ServiceBusConn")] IAsyncCollector<string> queueContacts, 
+            [ActivityTrigger] List<CampaignContact> contactList,
+            [ServiceBus("myqueue", Connection = "ServiceBusConn")] IAsyncCollector<string> queueContacts,
             ILogger log)
         {
-            int numContacts = 0;
-
             // Iterate through EntityCollection and queue each campaign contact
             foreach (CampaignContact campaignContact in contactList)
             {
@@ -236,13 +237,7 @@ namespace CampaignList
                 string ccJson = JsonConvert.SerializeObject(campaignContact);
                 queueContacts.AddAsync(ccJson);
 
-                // Increment the number of contacts being queued.
-                numContacts++;
-
-                System.Console.WriteLine("{0}.\t{1}\t\t{2}",
-                    numContacts,
-                    campaignContact.FullName,
-                    campaignContact.EmailAddress);
+                log.LogInformation($"[EmailAddress] {campaignContact.EmailAddress}");
             }
         }
 
