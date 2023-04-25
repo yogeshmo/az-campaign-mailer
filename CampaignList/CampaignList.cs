@@ -166,7 +166,7 @@ namespace CampaignList
                         }
 
                         // Start the new activity function and capture the task reference.
-                        Task<string> result = context.CallActivityAsync<string>("QueueContactsActivity", pageContactList);
+                        await context.CallActivityAsync<string>("QueueContactsActivity", pageContactList);
 
                         // Check for more records.
                         if (pageCollection.MoreRecords)
