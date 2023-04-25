@@ -13,8 +13,6 @@ namespace CampaignEmailApp
 
         public string EmailAddress { get; set; }
 
-        public string SenderEmailAddress { get; set; }
-
         public string ReplyToEmailAddress { get; set; }
 
         public string ReplyToDisplayName { get; set; }
