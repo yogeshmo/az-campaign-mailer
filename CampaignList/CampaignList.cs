@@ -1,4 +1,3 @@
-using CampaignEmailApp;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.DurableTask;
 using Microsoft.Azure.WebJobs.Extensions.Http;
@@ -70,7 +69,9 @@ namespace CampaignList
         /// <returns></returns>
         [FunctionName("CampaignListOrchestrator")]
         public static async Task<string> RunOrchestrator(
-            [OrchestrationTrigger] IDurableOrchestrationContext context, ILogger log)
+            [OrchestrationTrigger] IDurableOrchestrationContext context,
+            [ServiceBus("myqueue", Connection = "ServiceBusConn")] IAsyncCollector<string> queueContacts,
+            ILogger log)
         {
             log.LogInformation($"************** RunOrchestrator method executing ********************");
 
@@ -85,7 +86,6 @@ namespace CampaignList
 
             // Fan out the Dataverse query and queuing to run in parallel
             log.LogInformation($"************** Fanning out ********************");
-            var parallelActivities = new List<Task<string>>();
 
             // Process the campaign list
             if (campaignConfig.ListName.Length > 0)
@@ -98,9 +98,6 @@ namespace CampaignList
 
                     // Initialize the page number.
                     int pageNumber = 1;
-
-                    // Initialize the number of records.
-                    int recordCount = 0;
 
                     // Specify the current paging cookie. For retrieving the first page, 
                     // pagingCookie should be null.
@@ -127,20 +124,24 @@ namespace CampaignList
 
                     // Process each page of the list query results until every page has been processed
                     bool morePages = true;
+                    List<Task> tasks = new();
                     while (morePages)
                     {
                         // Add the pagination attributes to the XML query.
-                        string currQueryXml = AddPaginationAttributes(queryXml, pagingCookie, pageNumber, recordCount);
+                        string currQueryXml = AddPaginationAttributes(queryXml, pagingCookie, pageNumber, pageSize);
 
                         // Excute the fetch query and get the results in XML format.
-                        RetrieveMultipleRequest fetchRequest = new RetrieveMultipleRequest
+                        RetrieveMultipleRequest fetchRequest = new()
                         {
                             Query = new FetchExpression(currQueryXml)
                         };
+
+                        log.LogInformation($"************** Fetching page {pageNumber} ********************");
+
                         EntityCollection pageCollection = ((RetrieveMultipleResponse)dataverseClient.Execute(fetchRequest)).EntityCollection;
 
                         // Convert EntityCollection to JSON serializable object collection.
-                        List<CampaignContact> pageContactList = new List<CampaignContact>();
+                        List<CampaignContact> pageContactList = new();
                         if (pageCollection.Entities.Count > 0)
                         {
                             foreach (var contact in pageCollection.Entities)
@@ -156,9 +157,12 @@ namespace CampaignList
                                     campaignContact.EmailAddress = ((AliasedValue)contact.Attributes["Contact.emailaddress1"]).Value.ToString();
                                     campaignContact.FullName = ((AliasedValue)contact.Attributes["Contact.fullname"]).Value.ToString();
                                 }
-                                campaignContact.MessageSubject = campaignConfig.MsgSubject;
-                                campaignContact.MessageBodyHtml = campaignConfig.MsgBodyHtml;
-                                campaignContact.MessageBodyPlainText = campaignConfig.MsgBodyPlainText;
+                                campaignContact.MessageSubject = campaignConfig.MessageSubject;
+                                campaignContact.MessageBodyHtml = campaignConfig.MessageBodyHtml;
+                                campaignContact.MessageBodyPlainText = campaignConfig.MessageBodyPlainText;
+                                campaignContact.SenderEmailAddress = campaignConfig.SenderEmailAddress;
+                                campaignContact.ReplyToEmailAddress = campaignConfig.ReplyToEmailAddress;
+                                campaignContact.ReplyToDisplayName = campaignConfig.ReplyToDisplayName;
 
                                 // Add contact to contact list
                                 pageContactList.Add(campaignContact);
@@ -168,13 +172,11 @@ namespace CampaignList
                         contactCount += pageContactList.Count;
 
                         // Start the new activity function and capture the task reference.
-                        _ = context.CallActivityAsync<string>("QueueContactsActivity", pageContactList);
+                        tasks.Add(QueueContacts(pageContactList, queueContacts, log));
 
                         // Check for more records.
                         if (pageCollection.MoreRecords)
                         {
-                            Console.WriteLine("\n****************\nPage number {0}\n****************", pageNumber);
-
                             // Increment the page number to retrieve the next page.
                             pageNumber++;
 
@@ -186,6 +188,8 @@ namespace CampaignList
                             morePages = false;
                         }
                     }
+
+                    await Task.WhenAll(tasks);
 
                     log.LogInformation($"Total number of contacts in the list: {contactCount}");
                     log.LogInformation($"Successfully completed processing {campaignConfig.ListName}");
@@ -202,10 +206,9 @@ namespace CampaignList
 
             // Wait until all the activity functions have done their work
             log.LogInformation($"************** 'Waiting' for parallel results ********************");
-            await Task.WhenAll(parallelActivities);
             log.LogInformation($"************** All activity functions complete ********************");
 
-            return parallelActivities.ToString();
+            return "Finished";
         }
 
 
@@ -224,10 +227,10 @@ namespace CampaignList
         /// <param name="pageCollection">EntityCollection containing the list of CampaignContact objects</param>
         /// <param name="log">Logger object used to log messages to Log Analytics workspace</param>
         /// <returns></returns>
-        [FunctionName("QueueContactsActivity")]
-        public static void QueueContacts(
-            [ActivityTrigger] List<CampaignContact> contactList,
-            [ServiceBus("myqueue", Connection = "ServiceBusConn")] IAsyncCollector<string> queueContacts,
+        //[FunctionName("QueueContactsActivity")]
+        public static async Task QueueContacts(
+            List<CampaignContact> contactList,
+            IAsyncCollector<string> queueContacts,
             ILogger log)
         {
             // Iterate through EntityCollection and queue each campaign contact
@@ -235,10 +238,10 @@ namespace CampaignList
             {
                 // Convert campaign contact to JSON and add it to the Azure Storage queue
                 string ccJson = JsonConvert.SerializeObject(campaignContact);
-                queueContacts.AddAsync(ccJson);
-
-                log.LogInformation($"[EmailAddress] {campaignContact.EmailAddress}");
+                await queueContacts.AddAsync(ccJson);
             }
+
+            log.LogInformation($"Added {contactList.Count} to ServiceBus Queue.");
         }
 
 

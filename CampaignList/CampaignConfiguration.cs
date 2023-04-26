@@ -1,23 +1,27 @@
 ﻿/*
  * CampaignList function helper class.
  */
-namespace CampaignEmailApp
+namespace CampaignList
 {
     /// <summary>
     /// Campaign configuration data used to encapsulate the HTTP message body data.
     /// </summary>
     public class CampaignConfiguration
     {
-        public int PageSize { get; set; }
-
         public string ListName { get; set; }
 
-        public string MsgSubject { get; set; }
+        public int PageSize { get; set; }
 
-        public string MsgBodyHtml { get; set; }
+        public string MessageSubject { get; set; }
 
-        public string MsgBodyPlainText { get; set; }
+        public string MessageBodyHtml { get; set; }
 
-        public string FromAddress { get; set; }
+        public string MessageBodyPlainText { get; set; }
+
+        public string SenderEmailAddress { get; set; }
+
+        public string ReplyToEmailAddress { get; set; }
+
+        public string ReplyToDisplayName { get; set; }
     }
 }

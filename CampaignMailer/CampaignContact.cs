@@ -22,5 +22,7 @@ namespace CampaignMailer
         public string MessageBodyHtml { get; set; }
 
         public string MessageBodyPlainText { get; set; }
+
+        public string SenderEmailAddress { get; set; }
     }
 }
