@@ -1,7 +1,7 @@
 ﻿/*
  * CampaignList Durable Function helper class.
  */
-namespace CampaignEmailApp
+namespace CampaignList
 {
     /// <summary>
     /// Campaign contact information class used to pass campaign and member contact
@@ -22,5 +22,7 @@ namespace CampaignEmailApp
         public string MessageBodyHtml { get; set; }
 
         public string MessageBodyPlainText { get; set; }
+
+        public string SenderEmailAddress { get; set; }
     }
 }
