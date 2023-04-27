@@ -39,8 +39,8 @@ namespace CampaignMailer
                 emailMessage.ReplyTo.Add(new EmailAddress(campaignContact.ReplyToEmailAddress, campaignContact.ReplyToDisplayName));
 
                 // Uncomment the below for a real execution
-                //EmailSendOperation emailSendOp = emailClient.Send(WaitUntil.Started, emailMessage, CancellationToken.None);
-                //logger.LogInformation($"Email sent to {campaignContact.EmailAddress} Tracking Operation Id: {emailSendOp.Id}");
+                EmailSendOperation emailSendOp = emailClient.Send(WaitUntil.Started, emailMessage, CancellationToken.None);
+                logger.LogInformation($"Email sent to {campaignContact.EmailAddress} Tracking Operation Id: {emailSendOp.Id}");
 
             }
             catch (RequestFailedException rfex)
@@ -49,7 +49,7 @@ namespace CampaignMailer
             }
             catch (Exception ex)
             {
-                logger.LogInformation($"Exception while sending email - {ex}");
+                logger.LogError($"Exception while sending email - {ex}");
             }
         }
     }

@@ -12,5 +12,6 @@
     "http": {
       "routePrefix": ""
     }
-  }
+  },
+  "functionTimeout": "-1"
 }
