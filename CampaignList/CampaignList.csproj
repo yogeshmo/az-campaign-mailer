@@ -13,6 +13,9 @@
     <PackageReference Include="Microsoft.PowerPlatform.Dataverse.Client" Version="1.0.39" />
   </ItemGroup>
   <ItemGroup>
+    <None Update="AlreadyMailedAddresses.txt">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
     <None Update="host.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
