@@ -407,7 +407,6 @@ namespace CampaignList
         }
 
 
-
         /// <summary>
         /// Add pagination attributes to the Dataverse query XML
         /// </summary>
@@ -634,6 +633,33 @@ namespace CampaignList
 
             // Return a response indicating success
             return blobName;
+        }
+
+        private static async Task<CampaignConfiguration> ReadCampaign(string blobName)
+        {
+            string blobFileName = blobName + ".json";
+
+            // Retrieve the Azure Storage account connection string and blob container name from app settings
+            string storageConnectionString = Environment.GetEnvironmentVariable("AzureWebJobsStorage");
+            string containerName = "campaigns";
+
+            // Create a CloudStorageAccount object from the connection string
+            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(storageConnectionString);
+
+            // Create a CloudBlobClient object from the storage account
+            CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
+
+            // Retrieve a reference to the blob container
+            CloudBlobContainer container = blobClient.GetContainerReference(containerName);
+
+            CloudBlob blobContent = container.GetBlobReference(blobFileName);
+
+            using var stream = new MemoryStream();
+            await blobContent.DownloadToStreamAsync(stream);
+            var json = Encoding.UTF8.GetString(stream.ToArray());
+
+            // Return a response indicating success
+            return JsonConvert.DeserializeObject<CampaignConfiguration>(json);
         }
     }
 }
