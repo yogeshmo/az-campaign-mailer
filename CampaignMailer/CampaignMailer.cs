@@ -88,7 +88,6 @@ namespace CampaignMailer
                     foreach (var item in currentResultSet)
                     {
                         log.LogInformation($"Processing email record: {item.RecipientEmailAddress}");
-                        M
                     }
                 }
             }
@@ -108,7 +107,7 @@ namespace CampaignMailer
 
             //if (campaignContact != null)
             //{
-            //    Mailer.SendMessage(campaignContact); 
+            //    Mailer.SendMessage(campaignContact);
             //}
             //else
             //{
