@@ -24,7 +24,7 @@ namespace CampaignMailer
 
             if (campaignContact != null)
             {
-                Mailer.SendMessage(campaignContact); 
+                //Mailer.SendMessage(campaignContact); 
             }
             else
             {
