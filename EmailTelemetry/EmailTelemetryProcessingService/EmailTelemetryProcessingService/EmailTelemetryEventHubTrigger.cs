@@ -1,5 +1,8 @@
 using Azure.Messaging.EventHubs;
+using Microsoft.Azure.Cosmos;
+using Microsoft.Azure.Cosmos.Serialization.HybridRow.Schemas;
 using Microsoft.Azure.WebJobs;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -8,12 +11,24 @@ using System.Threading.Tasks;
 
 namespace EmailTelemetryProcessingService
 {
-    public static class EmailTelemetryEventHubTrigger
+    public class EmailTelemetryEventHubTrigger
     {
+        private readonly CosmosClient _cosmosClient;
+        private readonly Database _database;
+        private readonly Container _container;
+        private string _databaseName;
+        private string _containerName;
+
+        public EmailTelemetryEventHubTrigger(CosmosClient cosmosClient, IConfiguration configuration)
+        {
+            _cosmosClient = new CosmosClient(configuration["COSMOSDB_CONNECTION_STRING"]);
+            _databaseName = configuration["DatabaseName"];
+            _containerName = configuration["CollectionName"];
+        }
 
 
         [FunctionName("EmailTelemetryEventHubTrigger")]
-        public static async Task Run([EventHubTrigger("email-telemetry-eventhub", Connection = "EVENT_HUB_CONNECTION_STRING")] EventData[] events, ILogger log)
+        public async Task Run([EventHubTrigger("email-telemetry-eventhub", Connection = "EVENT_HUB_CONNECTION_STRING")] EventData[] events, ILogger log)
         {
             var exceptions = new List<Exception>();
 
@@ -21,9 +36,22 @@ namespace EmailTelemetryProcessingService
             {
                 try
                 {
-                    // Replace these two lines with your processing logic.
-                    log.LogInformation($"C# Event Hub trigger function processed a message: {eventData.EventBody}");
-                    await Task.Yield();
+                    var container = _cosmosClient.GetContainer(_databaseName, _containerName);
+
+                    try
+                    {
+                        var response = await container.ReadItemAsync<dynamic>(id, new PartitionKey(partitionKey));
+                        var oldItem = response.Resource;
+
+                        oldItem.Property1 = item.Property1;
+                        oldItem.Property2 = item.Property2;
+
+                        await container.ReplaceItemAsync(oldItem, id, new PartitionKey(partitionKey));
+                    }
+                    catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    {
+                        throw new Exception($"Item {id} not found");
+                    }
                 }
                 catch (Exception e)
                 {
