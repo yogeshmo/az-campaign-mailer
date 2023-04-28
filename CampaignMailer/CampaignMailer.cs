@@ -11,6 +11,12 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using Azure.Communication.Email;
 using System.Collections.Generic;
+using Microsoft.WindowsAzure.Storage.Blob;
+using Microsoft.WindowsAzure.Storage;
+using System.IO;
+using System.Text;
+using System.Reflection.Metadata;
+using CampaignList;
 
 namespace CampaignMailer
 {
@@ -21,6 +27,11 @@ namespace CampaignMailer
         private readonly Microsoft.Azure.Cosmos.Container _container;
         private string _databaseName;
         private string _containerName;
+
+        private readonly string _blobName;
+        private readonly string _blobContainerName;
+        private readonly CloudBlob _blobContent;
+
         private readonly int _numRecipientsPerRequest = 50;
 
         public CampaignMailer(CosmosClient cosmosClient, IConfiguration configuration)
@@ -29,6 +40,20 @@ namespace CampaignMailer
             _databaseName = configuration["DatabaseName"];
             _containerName = configuration["CollectionName"];
             _container = _cosmosClient.GetContainer(_databaseName, _containerName);
+
+            _blobName = configuration["BlobName"];
+            _blobContainerName = configuration["BlobContainerName"];
+            var blobConnectionString = configuration["BlobConnectionString"];
+
+            // Create a CloudStorageAccount object from the connection string
+            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(blobConnectionString);
+
+            // Create a CloudBlobClient object from the storage account
+            CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
+
+            // Retrieve a reference to the blob container
+            CloudBlobContainer container = blobClient.GetContainerReference(_blobContainerName);
+            _blobContent = container.GetBlobReference(_blobName);
         }
 
         /// <summary>
@@ -76,6 +101,7 @@ namespace CampaignMailer
             Mailer.Initialize(log);
 
             var campaignRequest = context.GetInput<CampaignRequest>();
+            var emailContent = await ReadEmailContentFromBlobStream();
 
             try
             {
@@ -103,11 +129,16 @@ namespace CampaignMailer
                         {
                             campaignContact = new CampaignContact()
                             {
-                                SenderEmailAddress = "",    // TODO:Get sender address from BlobDto
+                                SenderEmailAddress = emailContent.SenderEmailAddress,
+                                MessageBodyHtml = emailContent.MessageBodyHtml,
+                                MessageSubject = emailContent.MessageSubject,
+                                MessageBodyPlainText = emailContent.MessageBodyPlainText,
+                                ReplyToDisplayName = emailContent.ReplyToDisplayName,
+                                ReplyToEmailAddress = emailContent.ReplyToEmailAddress,
                             };
                         }
 
-                        campaignContact.EmailAddresses.Add(new EmailAddress(item.RecipientEmailAddress, item.RecipientFullName));
+                        campaignContact.EmailAddresses.Add(new EmailAddress(item.RecipientEmailAddress, string.Empty));
                         count++;
 
                         if (count == _numRecipientsPerRequest)
@@ -146,7 +177,7 @@ namespace CampaignMailer
                 {
                     RecipientEmailAddress = recipient.Address,
                     RecipientFullName = recipient.DisplayName,
-                    Status = "InProgress",
+                    Status = DeliveryStatus.InProgress.ToString(),
                     CampaignId = campaignId,
                 };
 
@@ -154,6 +185,26 @@ namespace CampaignMailer
             }
 
             await Task.WhenAll(updateDbTasks);
+        }
+
+        private async Task<BlobDto> ReadEmailContentFromBlobStream()
+        {
+            using var stream = new MemoryStream();
+            await _blobContent.DownloadToStreamAsync(stream);
+
+            // Return a response indicating success
+            var blobContentSerializedString = Encoding.UTF8.GetString(stream.ToArray());
+
+            try
+            {
+                var blobContent = JsonConvert.DeserializeObject<BlobDto>(blobContentSerializedString);
+                return blobContent;
+            }
+            catch (Exception ex)
+            {
+                // log error
+                return null;
+            }
         }
     }
 }
