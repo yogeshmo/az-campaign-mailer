@@ -15,8 +15,6 @@ namespace CampaignMailer
     {
         public List<EmailAddress> EmailAddresses { get; set; } = new List<EmailAddress>();  // email address, full name tuple
 
-
-
         public string ReplyToEmailAddress { get; set; }
 
 
