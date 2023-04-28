@@ -50,29 +50,37 @@ namespace CampaignMailer
            [DurableClient] IDurableOrchestrationClient client,
            ILogger log)
         {
-            // Get the campaign information from the HTTP request body
-            CampaignRequest campaignRequest = await req.Content.ReadAsAsync<CampaignRequest>();
+            log.LogInformation($"Starting Sending Email Campaign");
 
-            // Function input comes from the request content.
-            string instanceId = await client.StartNewAsync("CampaignListOrchestrator", campaignRequest);
-
-            log.LogInformation($"Started orchestration with ID = '{instanceId}", instanceId);
-
-            // Create the URL to allow the client to check status of a request (excluding the function key in the code querystring)
-            string checkStatusUrl = string.Format("{0}://{1}:{2}/campaign/CampaignListHttpStart_Status?id={3}", req.RequestUri.Scheme, req.RequestUri.Host, req.RequestUri.Port, instanceId);
-
-            // Create the response and add headers
-            var response = new HttpResponseMessage()
+            try
             {
-                StatusCode = System.Net.HttpStatusCode.Accepted,
-                Content = new StringContent(checkStatusUrl),
-            };
-            response.Headers.Add("Location", checkStatusUrl);
-            response.Headers.Add("Retry-After", "10");
+                // Get the campaign information from the HTTP request body
+                CampaignRequest campaignRequest = await req.Content.ReadAsAsync<CampaignRequest>();
 
-            return response;
+                // Function input comes from the request content.
+                string instanceId = await client.StartNewAsync("CampaignListOrchestrator", campaignRequest);
+
+                log.LogInformation($"Started orchestration with ID = '{instanceId}", instanceId);
+
+                // Create the URL to allow the client to check status of a request (excluding the function key in the code querystring)
+                string checkStatusUrl = string.Format("{0}://{1}:{2}/campaign/CampaignListHttpStart_Status?id={3}", req.RequestUri.Scheme, req.RequestUri.Host, req.RequestUri.Port, instanceId);
+
+                // Create the response and add headers
+                var response = new HttpResponseMessage()
+                {
+                    StatusCode = System.Net.HttpStatusCode.Accepted,
+                    Content = new StringContent(checkStatusUrl),
+                };
+                response.Headers.Add("Location", checkStatusUrl);
+                response.Headers.Add("Retry-After", "10");
+
+                return response;
+            }
+            catch (Exception)
+            {
+                throw;
+            }                       
         }
-
 
         [FunctionName("CampaignListOrchestrator")]
         public async Task RunOrchestrator(
@@ -82,8 +90,20 @@ namespace CampaignMailer
             Mailer.Initialize(log);
 
             var campaignRequest = context.GetInput<CampaignRequest>();
-            var emailContent = await ReadEmailContentFromBlobStream(campaignRequest.CampaignId);
+            var emailBlobContent = await ReadEmailContentFromBlobStream(campaignRequest.CampaignId);
 
+            var tasks = new List<Task>(); 
+            tasks.Add(Task.Run(() => SendMessageAsync(log, campaignRequest,emailBlobContent)));
+            //tasks.Add(Task.Run(() => SendMessageAsync(log, campaignRequest,emailBlobContent)));
+            //tasks.Add(Task.Run(() => SendMessageAsync(log, campaignRequest,emailBlobContent)));
+            //tasks.Add(Task.Run(() => SendMessageAsync(log, campaignRequest,emailBlobContent)));
+            //tasks.Add(Task.Run(() => SendMessageAsync(log, campaignRequest,emailBlobContent)));
+            await Task.WhenAll(tasks);
+
+        }
+
+        private async Task SendMessageAsync(ILogger log, CampaignRequest campaignRequest, BlobDto emailBlobContent)
+        {
             try
             {
                 var queryString = string.Empty;
@@ -110,12 +130,12 @@ namespace CampaignMailer
                         {
                             campaignContact = new CampaignContact()
                             {
-                                SenderEmailAddress = emailContent.SenderEmailAddress,
-                                MessageBodyHtml = emailContent.MessageBodyHtml,
-                                MessageSubject = emailContent.MessageSubject,
-                                MessageBodyPlainText = emailContent.MessageBodyPlainText,
-                                ReplyToDisplayName = emailContent.ReplyToDisplayName,
-                                ReplyToEmailAddress = emailContent.ReplyToEmailAddress,
+                                SenderEmailAddress = emailBlobContent.SenderEmailAddress,
+                                MessageBodyHtml = emailBlobContent.MessageBodyHtml,
+                                MessageSubject = emailBlobContent.MessageSubject,
+                                MessageBodyPlainText = emailBlobContent.MessageBodyPlainText,
+                                ReplyToDisplayName = emailBlobContent.ReplyToDisplayName,
+                                ReplyToEmailAddress = emailBlobContent.ReplyToEmailAddress,
                             };
                         }
 
@@ -201,10 +221,9 @@ namespace CampaignMailer
                 var blobContentDeSerialized = JsonConvert.DeserializeObject<BlobDto>(blobContentSerializedString);
                 return blobContentDeSerialized;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // log error
-                return null;
+                throw;
             }
         }
     }
