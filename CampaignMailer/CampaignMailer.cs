@@ -19,7 +19,7 @@ namespace CampaignMailer
         private readonly Microsoft.Azure.Cosmos.Container _container;
         private string _databaseName;
         private string _containerName;
-        private string _partitionKey;
+        private readonly int _numRecipientsPerRequest = 50;
 
         public CampaignMailer(CosmosClient cosmosClient, IConfiguration configuration)
         {
@@ -27,7 +27,6 @@ namespace CampaignMailer
             _databaseName = configuration["DatabaseName"];
             _containerName = configuration["CollectionName"];
             _container = _cosmosClient.GetContainer(_databaseName, _containerName);
-            _partitionKey = configuration["CampaignId"];
         }
 
         /// <summary>
@@ -74,45 +73,56 @@ namespace CampaignMailer
             ILogger log)
         {
             Mailer.Initialize(log);
-            // CampaignContact campaignContact = null;
+
+            var campaignRequest = context.GetInput<CampaignRequest>();
 
             try
             {
                 var query = new QueryDefinition("SELECT * FROM c WHERE c.partitionKey = @partitionKey")
-                    .WithParameter("@partitionKey", _partitionKey);
+                    .WithParameter("@partitionKey", campaignRequest.CampaignId);
 
                 using var resultSetIterator = _container.GetItemQueryIterator<EmailListDto>(query);
                 while (resultSetIterator.HasMoreResults)
                 {
+                    int count = 0;
                     var currentResultSet = await resultSetIterator.ReadNextAsync();
+                    CampaignContact campaignContact = null;
                     foreach (var item in currentResultSet)
                     {
-                        log.LogInformation($"Processing email record: {item.RecipientEmailAddress}");
+                        if (count == 0)
+                        {
+                            campaignContact = new CampaignContact()
+                            {
+                                SenderEmailAddress = "",    // TODO:Get sender address from BlobDto
+                            };
+                        }
+
+                        campaignContact.EmailAddresses.Add(new Azure.Communication.Email.EmailAddress(item.RecipientEmailAddress, item.RecipientFullName));
+                        count++;
+
+                        if (count == _numRecipientsPerRequest)
+                        {
+                            // send email
+                            Mailer.SendMessage(campaignContact);
+
+                            campaignContact = null;
+                            count = 0;
+                            log.LogInformation($"Processing email record for {_numRecipientsPerRequest} recipients");
+                        }
+                    }
+
+                    if (count < _numRecipientsPerRequest)
+                    {
+                        // send email
+                        Mailer.SendMessage(campaignContact);
+                        log.LogInformation($"Processing email record for {count} recipients");
                     }
                 }
             }
             catch (Exception ex)
             {
-
+                log.LogError($"orchestrator failed with exception {ex}");
             }
-
-            //try
-            //{
-            //    campaignContact = JsonConvert.DeserializeObject<CampaignContact>(myQueueItem);
-            //}
-            //catch (Exception ex)
-            //{
-            //    log.LogCritical($"Exception while attempting to deserialize {myQueueItem} - {ex}");
-            //}
-
-            //if (campaignContact != null)
-            //{
-            //    Mailer.SendMessage(campaignContact);
-            //}
-            //else
-            //{
-            //    log.LogError($"{myQueueItem} was serialized to null.");
-            //}
         }
     }
 }
