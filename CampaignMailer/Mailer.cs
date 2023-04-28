@@ -2,7 +2,11 @@
 using Azure.Communication.Email;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
+using static System.Formats.Asn1.AsnWriter;
 
 namespace CampaignMailer
 {
@@ -24,33 +28,46 @@ namespace CampaignMailer
             emailClient = new EmailClient(connectionString);
         }
 
-        public static void SendMessage(CampaignContact campaignContact)
+
+        public static async Task SendAsync(CampaignContact campaignContact)
         {
+
+            // Create the email content - subject and email message
             try
             {
-                // Create the email content - subject and email message
                 var emailContent = new EmailContent(campaignContact.MessageSubject)
                 {
                     PlainText = campaignContact.MessageBodyPlainText,
                     Html = campaignContact.MessageBodyHtml,
                 };
 
-                EmailMessage emailMessage = new(campaignContact.SenderEmailAddress, campaignContact.EmailAddress, emailContent);
+                // Create the email message TO distribution list
+
+                var emailRecipients = new EmailRecipients(null, null, campaignContact.EmailAddresses);
+
+                EmailMessage emailMessage = new(campaignContact.SenderEmailAddress, emailRecipients, emailContent);
                 emailMessage.ReplyTo.Add(new EmailAddress(campaignContact.ReplyToEmailAddress, campaignContact.ReplyToDisplayName));
 
+                var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+
                 // Uncomment the below for a real execution
-                EmailSendOperation emailSendOp = emailClient.Send(WaitUntil.Started, emailMessage, CancellationToken.None);
-                logger.LogInformation($"Email sent to {campaignContact.EmailAddress} Tracking Operation Id: {emailSendOp.Id}");
+                EmailSendOperation emailSendOp = await emailClient.SendAsync(WaitUntil.Started, emailMessage, cts.Token);
+                logger.LogInformation($"Email sent to Tracking Operation Id: {emailSendOp.Id}");
 
             }
             catch (RequestFailedException rfex)
             {
-                logger.LogCritical($"Failed to deliver email to {campaignContact.EmailAddress} Request failed exception - {rfex}");
+                logger.LogCritical($"Failed to deliver email Request failed exception - {rfex}");
+            }
+            catch (OperationCanceledException ocex)
+            {
+                logger.LogError($"Timeout Exception while sending email - {ocex}");
             }
             catch (Exception ex)
             {
                 logger.LogError($"Exception while sending email - {ex}");
             }
+
         }
     }
 }
