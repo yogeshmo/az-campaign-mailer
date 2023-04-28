@@ -114,7 +114,7 @@ namespace CampaignMailer
                         {
                             // send email
                             await UpdateStatusInCosomsDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
-                            Mailer.SendMessage(campaignContact);
+                            await Mailer.SendAsync(campaignContact);
 
                             campaignContact = null;
                             count = 0;
@@ -126,7 +126,7 @@ namespace CampaignMailer
                     {
                         // send email
                         await UpdateStatusInCosomsDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
-                        Mailer.SendMessage(campaignContact);
+                        await Mailer.SendAsync(campaignContact);
                         log.LogInformation($"Processing email record for {count} recipients");
                     }
                 }

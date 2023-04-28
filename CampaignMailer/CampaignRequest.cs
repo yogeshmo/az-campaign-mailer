@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace CampaignMailer
 {
-    internal class CampaignRequest
+    public class CampaignRequest
     {
         [JsonProperty("campaignId", Required = Required.Always)]
         public string CampaignId { get; set; }
