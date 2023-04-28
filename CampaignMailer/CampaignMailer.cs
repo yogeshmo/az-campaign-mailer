@@ -103,17 +103,14 @@ namespace CampaignMailer
                         if (count == _numRecipientsPerRequest)
                         {
                             // send email
-                            Mailer.SendMessage(campaignContact);
+                           await Mailer.SendAsync(campaignContact);
 
                             campaignContact = null;
                             count = 0;
                             log.LogInformation($"Processing email record for {_numRecipientsPerRequest} recipients");
                         }
                     }
-
-            if (campaignContact != null)
-            {
-                Mailer.SendMessage(campaignContact); 
+                }
             }
             catch (Exception ex)
             {
