@@ -1,4 +1,5 @@
-﻿using System;
+﻿using Newtonsoft.Json;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -8,6 +9,10 @@ namespace CampaignMailer
 {
     internal class CampaignRequest
     {
+        [JsonProperty("campaignId", Required = Required.Always)]
         public string CampaignId { get; set; }
+
+        [JsonProperty("sendOnlyToNewRecipients")]
+        public bool SendOnlyToNewRecipients { get; set; } = true;
     }
 }

@@ -9,6 +9,8 @@ using System;
 using System.ComponentModel;
 using System.Net.Http;
 using System.Threading.Tasks;
+using Azure.Communication.Email;
+using System.Collections.Generic;
 
 namespace CampaignMailer
 {
@@ -38,7 +40,7 @@ namespace CampaignMailer
         /// <returns>The URLs to check the status of the function.</returns>
         [FunctionName("CampaignMailerHttpStart")]
         public static async Task<HttpResponseMessage> HttpStart(
-           [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "campaign")] HttpRequestMessage req,
+           [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "startCampaignMailer")] HttpRequestMessage req,
            [DurableClient] IDurableOrchestrationClient client,
            ILogger log)
         {
@@ -69,7 +71,6 @@ namespace CampaignMailer
         [FunctionName("CampaignListOrchestrator")]
         public async Task RunOrchestrator(
             [OrchestrationTrigger] IDurableOrchestrationContext context,
-            // [ServiceBus("myqueue", Connection = "ServiceBusConn")] IAsyncCollector<string> queueContacts,
             ILogger log)
         {
             Mailer.Initialize(log);
@@ -78,10 +79,19 @@ namespace CampaignMailer
 
             try
             {
-                var query = new QueryDefinition("SELECT * FROM c WHERE c.partitionKey = @partitionKey")
-                    .WithParameter("@partitionKey", campaignRequest.CampaignId);
+                var queryString = string.Empty;
+                if (campaignRequest.SendOnlyToNewRecipients)
+                {
+                    queryString = $"SELECT * FROM c WHERE c.partitionKey = '{campaignRequest.CampaignId}' AND c.status = 'NotStarted'";
+                }
+                else
+                {
+                    queryString = $"SELECT * FROM c WHERE c.partitionKey = '{campaignRequest.CampaignId}' AND c.status = 'InProgress'";
+                }
 
-                using var resultSetIterator = _container.GetItemQueryIterator<EmailListDto>(query);
+                var query = new QueryDefinition(queryString);
+
+                using var resultSetIterator = _container.GetItemQueryIterator<EmailListDto>(queryString);
                 while (resultSetIterator.HasMoreResults)
                 {
                     int count = 0;
@@ -97,12 +107,13 @@ namespace CampaignMailer
                             };
                         }
 
-                        campaignContact.EmailAddresses.Add(new Azure.Communication.Email.EmailAddress(item.RecipientEmailAddress, item.RecipientFullName));
+                        campaignContact.EmailAddresses.Add(new EmailAddress(item.RecipientEmailAddress, item.RecipientFullName));
                         count++;
 
                         if (count == _numRecipientsPerRequest)
                         {
                             // send email
+                            await UpdateStatusInCosomsDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
                             Mailer.SendMessage(campaignContact);
 
                             campaignContact = null;
@@ -114,6 +125,7 @@ namespace CampaignMailer
                     if (count < _numRecipientsPerRequest)
                     {
                         // send email
+                        await UpdateStatusInCosomsDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
                         Mailer.SendMessage(campaignContact);
                         log.LogInformation($"Processing email record for {count} recipients");
                     }
@@ -123,6 +135,25 @@ namespace CampaignMailer
             {
                 log.LogError($"orchestrator failed with exception {ex}");
             }
+        }
+
+        private async Task UpdateStatusInCosomsDBForRecipients(List<EmailAddress> recipients, string campaignId)
+        {
+            List<Task> updateDbTasks = new List<Task>();
+            foreach (var recipient in recipients)
+            {
+                var emailListDto = new EmailListDto()
+                {
+                    RecipientEmailAddress = recipient.Address,
+                    RecipientFullName = recipient.DisplayName,
+                    Status = "InProgress",
+                    CampaignId = campaignId,
+                };
+
+                updateDbTasks.Add(_container.UpsertItemAsync(emailListDto, new PartitionKey(emailListDto.CampaignId)));
+            }
+
+            await Task.WhenAll(updateDbTasks);
         }
     }
 }
