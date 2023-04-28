@@ -13,7 +13,7 @@ namespace EmailTelemetryProcessingService
 
 
         [FunctionName("EmailTelemetryEventHubTrigger")]
-        public static async Task Run([EventHubTrigger("eventhub-email-telemetry", Connection = "EVENT_HUB_CONNECTION_STRING")] EventData[] events, ILogger log)
+        public static async Task Run([EventHubTrigger("email-telemetry-eventhub", Connection = "EVENT_HUB_CONNECTION_STRING")] EventData[] events, ILogger log)
         {
             var exceptions = new List<Exception>();
 
