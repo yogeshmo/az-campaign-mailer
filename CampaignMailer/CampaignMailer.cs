@@ -1,59 +1,40 @@
+using Azure.Communication.Email;
+using CampaignList;
 using Microsoft.Azure.Cosmos;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.DurableTask;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.WindowsAzure.Storage;
+using Microsoft.WindowsAzure.Storage.Blob;
 using Newtonsoft.Json;
 using System;
-using System.ComponentModel;
-using System.Net.Http;
-using System.Threading.Tasks;
-using Azure.Communication.Email;
 using System.Collections.Generic;
-using Microsoft.WindowsAzure.Storage.Blob;
-using Microsoft.WindowsAzure.Storage;
 using System.IO;
+using System.Net.Http;
 using System.Text;
-using System.Reflection.Metadata;
-using CampaignList;
+using System.Threading.Tasks;
 
 namespace CampaignMailer
 {
     public class CampaignMailer
     {
         private readonly CosmosClient _cosmosClient;
-        private readonly Database _database;
         private readonly Microsoft.Azure.Cosmos.Container _container;
         private string _databaseName;
         private string _containerName;
-
-        private readonly string _blobName;
-        private readonly string _blobContainerName;
-        private readonly CloudBlob _blobContent;
+        private readonly IConfiguration _configuration;
 
         private readonly int _numRecipientsPerRequest = 50;
 
-        public CampaignMailer(CosmosClient cosmosClient, IConfiguration configuration)
+        public CampaignMailer(IConfiguration configuration)
         {
+            _configuration = configuration;
             _cosmosClient = new CosmosClient(configuration["COSMOSDB_CONNECTION_STRING"]);
-            _databaseName = configuration["DatabaseName"];
-            _containerName = configuration["CollectionName"];
+            _databaseName = "Campaign";
+            _containerName = "EmailList";
             _container = _cosmosClient.GetContainer(_databaseName, _containerName);
-
-            _blobName = configuration["BlobName"];
-            _blobContainerName = configuration["BlobContainerName"];
-            var blobConnectionString = configuration["BlobConnectionString"];
-
-            // Create a CloudStorageAccount object from the connection string
-            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(blobConnectionString);
-
-            // Create a CloudBlobClient object from the storage account
-            CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
-
-            // Retrieve a reference to the blob container
-            CloudBlobContainer container = blobClient.GetContainerReference(_blobContainerName);
-            _blobContent = container.GetBlobReference(_blobName);
         }
 
         /// <summary>
@@ -101,7 +82,7 @@ namespace CampaignMailer
             Mailer.Initialize(log);
 
             var campaignRequest = context.GetInput<CampaignRequest>();
-            var emailContent = await ReadEmailContentFromBlobStream();
+            var emailContent = await ReadEmailContentFromBlobStream(campaignRequest.CampaignId);
 
             try
             {
@@ -187,18 +168,38 @@ namespace CampaignMailer
             await Task.WhenAll(updateDbTasks);
         }
 
-        private async Task<BlobDto> ReadEmailContentFromBlobStream()
+        private CloudBlob GetBlobContent(string campaignId)
         {
+            var blobName = campaignId + ".json";
+            var blobContainerName = "campaigns";
+            var blobConnectionString = _configuration["AzureWebJobsStorage"];
+
+            // Create a CloudStorageAccount object from the connection string
+            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(blobConnectionString);
+
+            // Create a CloudBlobClient object from the storage account
+            CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
+
+            // Retrieve a reference to the blob container
+            CloudBlobContainer container = blobClient.GetContainerReference(blobContainerName);
+            var blobContent = container.GetBlobReference(blobName);
+
+            return blobContent;
+        }
+
+        private async Task<BlobDto> ReadEmailContentFromBlobStream(string campaignId)
+        {
+            var blobContent = GetBlobContent(campaignId);
             using var stream = new MemoryStream();
-            await _blobContent.DownloadToStreamAsync(stream);
+            await blobContent.DownloadToStreamAsync(stream);
 
             // Return a response indicating success
             var blobContentSerializedString = Encoding.UTF8.GetString(stream.ToArray());
 
             try
             {
-                var blobContent = JsonConvert.DeserializeObject<BlobDto>(blobContentSerializedString);
-                return blobContent;
+                var blobContentDeSerialized = JsonConvert.DeserializeObject<BlobDto>(blobContentSerializedString);
+                return blobContentDeSerialized;
             }
             catch (Exception ex)
             {
