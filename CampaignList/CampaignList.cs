@@ -1,9 +1,12 @@
 using Azure.Messaging.ServiceBus;
+using Microsoft.Azure.Cosmos;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.DurableTask;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.PowerPlatform.Dataverse.Client;
+using Microsoft.WindowsAzure.Storage;
+using Microsoft.WindowsAzure.Storage.Blob;
 using Microsoft.Xrm.Sdk;
 using Microsoft.Xrm.Sdk.Messages;
 using Microsoft.Xrm.Sdk.Query;
@@ -12,6 +15,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
@@ -73,14 +77,37 @@ namespace CampaignList
         public static async Task<string> RunOrchestrator(
             [OrchestrationTrigger] IDurableOrchestrationContext context,
             [ServiceBus("myqueue", Connection = "ServiceBusConn")] IAsyncCollector<string> queueContacts,
-            ILogger log)
+            ILogger log,
+            ExecutionContext executionContext)
         {
             log.LogInformation($"************** RunOrchestrator method executing ********************");
 
             // Retrive the campaign configuration object from the HTTP context
             CampaignConfiguration campaignConfig = context.GetInput<CampaignConfiguration>();
 
-            alreadySentEmails = GetAlreadyMailedAddresses();
+            string blobName = null;
+            try
+            {
+                blobName = await UploadCampaign(campaignConfig, log);
+            }
+            catch (Exception ex)
+            {
+                log.LogError($"Failed to upload campaign to blob storage {ex}");
+                return "Failed";
+            }
+
+            Container cosmosContainer = null;
+            try
+            {
+                cosmosContainer = GetCosmosContainer();
+            }
+            catch (Exception ex)
+            {
+                log.LogError($"Failed to initialize Cosmos DB {ex}");
+                return "Failed";
+            }
+
+            alreadySentEmails = GetAlreadyMailedAddresses(executionContext);
 
             // Create the Dataverse ServiceClient by connecting to the Dataverse database
             if (dataverseClient == null)
@@ -147,44 +174,69 @@ namespace CampaignList
                             EntityCollection pageCollection = ((RetrieveMultipleResponse)dataverseClient.Execute(fetchRequest)).EntityCollection;
 
                             // Convert EntityCollection to JSON serializable object collection.
-                            List<CampaignContact> pageContactList = new();
                             if (pageCollection.Entities.Count > 0)
                             {
+                                var batch = cosmosContainer.CreateTransactionalBatch(new PartitionKey(blobName));
+
                                 foreach (var contact in pageCollection.Entities)
                                 {
-                                    CampaignContact campaignContact = new();
+                                    EmailListDto contactListRecord = new()
+                                    {
+                                        CampaignId = blobName
+                                    };
+
                                     if (isDynamic)
                                     {
-                                        campaignContact.EmailAddress = contact.Attributes["emailaddress1"].ToString();
-                                        campaignContact.FullName = contact.Attributes["fullname"].ToString();
+                                        contactListRecord.RecipientEmailAddress = contact.Attributes["emailaddress1"].ToString();
+                                        contactListRecord.RecipientFullName = contact.Attributes["fullname"].ToString();
                                     }
                                     else
                                     {
-                                        campaignContact.EmailAddress = ((AliasedValue)contact.Attributes["Contact.emailaddress1"]).Value.ToString();
-                                        campaignContact.FullName = ((AliasedValue)contact.Attributes["Contact.fullname"]).Value.ToString();
+                                        contactListRecord.RecipientEmailAddress = ((AliasedValue)contact.Attributes["Contact.emailaddress1"]).Value.ToString();
+                                        contactListRecord.RecipientFullName = ((AliasedValue)contact.Attributes["Contact.fullname"]).Value.ToString();
                                     }
-                                    campaignContact.MessageSubject = campaignConfig.MessageSubject;
-                                    campaignContact.MessageBodyHtml = campaignConfig.MessageBodyHtml;
-                                    campaignContact.MessageBodyPlainText = campaignConfig.MessageBodyPlainText;
-                                    campaignContact.SenderEmailAddress = campaignConfig.SenderEmailAddress;
-                                    campaignContact.ReplyToEmailAddress = campaignConfig.ReplyToEmailAddress;
-                                    campaignContact.ReplyToDisplayName = campaignConfig.ReplyToDisplayName;
 
-                                    // Add contact to contact list
-                                    pageContactList.Add(campaignContact);
+                                    contactListRecord.Status = IsAlreadyMailed(contactListRecord.RecipientEmailAddress) ? DeliveryStatus.Completed.ToString() : DeliveryStatus.NotStarted.ToString();
+
+                                    batch.CreateItem(contactListRecord);
                                 }
-                            }
 
-                            contactCount += pageContactList.Count;
-
-                            // Start the new activity function and capture the task reference.
-                            try
-                            {
-                                await QueueContacts(pageContactList, queueContacts, log);
-                            }
-                            catch (Exception ex)
-                            {
-                                log.LogError($"{ex}");
+                                var response = await batch.ExecuteAsync();
+                                if (response.IsSuccessStatusCode)
+                                {
+                                    log.LogInformation($"Successfully added {pageCollection.Entities.Count} contacts to CosmosDb");
+                                }
+                                else
+                                {
+                                    Dictionary<HttpStatusCode, int> results = new();
+                                    foreach (var operation in response)
+                                    {
+                                        if (results.ContainsKey(operation.StatusCode))
+                                        {
+                                            results[operation.StatusCode]++;
+                                        }
+                                        else
+                                        {
+                                            results[operation.StatusCode] = 1;
+                                        }
+                                        
+                                    }
+                                    foreach (var result in results)
+                                    {
+                                        if (result.Key == HttpStatusCode.Created)
+                                        {
+                                            log.LogInformation($"*******************Successfully added {result.Value} contacts to CosmosDb*******************");
+                                        }
+                                        else if (result.Key == HttpStatusCode.Conflict)
+                                        {
+                                            log.LogWarning($"*******************Found {result.Value} duplicate contacts that were fetched from Dataverse.*******************");
+                                        }
+                                        else
+                                        {
+                                            log.LogError($"*******************Failed to add {result.Value} contacts to CosmosDb with error code: {result.Key}*******************");
+                                        }
+                                    }
+                                }
                             }
 
                             // Check for more records.
@@ -472,21 +524,21 @@ namespace CampaignList
         {
             // Dataverse environment URL and auth credentials.
             // Dataverse environment URL and login info.
-            string url = Environment.GetEnvironmentVariable("DATAVERSE_URL");
-            string appId = Environment.GetEnvironmentVariable("DATAVERSE_APPID");
-            string secret = Environment.GetEnvironmentVariable("DATAVERSE_SECRET");
+            //string url = Environment.GetEnvironmentVariable("DATAVERSE_URL");
+            //string appId = Environment.GetEnvironmentVariable("DATAVERSE_APPID");
+            //string secret = Environment.GetEnvironmentVariable("DATAVERSE_SECRET");
 
 
 
-            // Create the Dataverse connection string
-            string connectionString =
-                $@"AuthType=ClientSecret;
-                SkipDiscovery=true;url={url};
-                Secret={secret};
-                ClientId={appId};
-                RequireNewInstance=true";
+            //// Create the Dataverse connection string
+            //string connectionString =
+            //    $@"AuthType=ClientSecret;
+            //    SkipDiscovery=true;url={url};
+            //    Secret={secret};
+            //    ClientId={appId};
+            //    RequireNewInstance=true";
 
-            //string connectionString = Environment.GetEnvironmentVariable("DataverseConn");
+            string connectionString = Environment.GetEnvironmentVariable("DataverseConn");
 
             try
             {
@@ -500,11 +552,11 @@ namespace CampaignList
             }
         }
 
-        private static HashSet<string> GetAlreadyMailedAddresses()
+        private static HashSet<string> GetAlreadyMailedAddresses(ExecutionContext context)
         {
             HashSet<string> addresses = new();
-            string path = Path.Combine(Environment.CurrentDirectory, "AlreadyMailedAddresses.txt");
-            using (StreamReader sr = new StreamReader(path))
+            string path = Path.Combine(context.FunctionAppDirectory, "AlreadyMailedAddresses.txt");
+            using (StreamReader sr = new(path))
             {
                 string line;
                 while ((line = sr.ReadLine()) != null)
@@ -518,6 +570,70 @@ namespace CampaignList
         private static bool IsAlreadyMailed(string emailAddress)
         {
             return alreadySentEmails.Contains(emailAddress);
+        }
+
+        private static CosmosClient InitializeCosmosClient()
+        {
+            string cosmosDbConnectionString = Environment.GetEnvironmentVariable("COSMOSDB_CONNECTION_STRING");
+            return new(cosmosDbConnectionString);
+        }
+
+        private static Container GetCosmosContainer()
+        {
+            var cosmosClient = InitializeCosmosClient();
+            return cosmosClient.GetContainer("Campaign", "EmailList");
+        }
+
+        private static string GetSerializedBlobDto(CampaignConfiguration campaignConfiguration)
+        {
+            BlobDto blobDto = new()
+            {
+                MessageBodyHtml = campaignConfiguration.MessageBodyHtml,
+                MessageBodyPlainText = campaignConfiguration.MessageBodyPlainText,
+                MessageSubject = campaignConfiguration.MessageSubject,
+                SenderEmailAddress = campaignConfiguration.SenderEmailAddress,
+                ReplyToEmailAddress = campaignConfiguration.ReplyToEmailAddress,
+                ReplyToDisplayName = campaignConfiguration.ReplyToDisplayName,
+            };
+
+            return JsonConvert.SerializeObject(blobDto);
+        }
+
+        private static async Task<string> UploadCampaign(CampaignConfiguration campaignConfiguration, ILogger log)
+        {
+            string blobName = Guid.NewGuid().ToString();
+            // Generate a GUID for the blob file name
+            string blobFileName = blobName + ".json";
+
+            // Retrieve the Azure Storage account connection string and blob container name from app settings
+            string storageConnectionString = Environment.GetEnvironmentVariable("AzureWebJobsStorage");
+            string containerName = "campaigns";
+
+            // Create a CloudStorageAccount object from the connection string
+            CloudStorageAccount storageAccount = CloudStorageAccount.Parse(storageConnectionString);
+
+            // Create a CloudBlobClient object from the storage account
+            CloudBlobClient blobClient = storageAccount.CreateCloudBlobClient();
+
+            // Retrieve a reference to the blob container
+            CloudBlobContainer container = blobClient.GetContainerReference(containerName);
+
+            // Create the container if it doesn't exist
+            await container.CreateIfNotExistsAsync();
+
+            // Retrieve a reference to the blob
+            CloudBlockBlob blob = container.GetBlockBlobReference(blobFileName);
+
+            // Upload the JSON data to the blob
+            using (Stream stream = new MemoryStream(Encoding.UTF8.GetBytes(GetSerializedBlobDto(campaignConfiguration))))
+            {
+                await blob.UploadFromStreamAsync(stream);
+            }
+
+            log.LogInformation($"Uploaded JSON file '{blobFileName}' to blob container '{containerName}'");
+
+            // Return a response indicating success
+            return blobName;
         }
     }
 }
