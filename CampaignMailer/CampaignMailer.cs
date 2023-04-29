@@ -105,21 +105,23 @@ namespace CampaignMailer
 
                 if (campaignRequest.SendOnlyToNewRecipients)
                 {
-                    queryString = $"SELECT * FROM c WHERE c.partitionKey = '{campaignRequest.CampaignId}' AND c.status = 'NotStarted'";
+                    queryString = $"SELECT * FROM c WHERE c.campaignId = '{campaignRequest.CampaignId}' AND c.status = 'NotStarted'";
                 }
                 else
                 {
-                    queryString = $"SELECT * FROM c WHERE c.partitionKey = '{campaignRequest.CampaignId}' AND c.status = 'InProgress'";
+                    queryString = $"SELECT * FROM c WHERE c.campaignId = '{campaignRequest.CampaignId}' AND c.status = 'InProgress'";
                 }
 
                 var query = new QueryDefinition(queryString);
                 //var tasks = new List<Task>();
                 using var resultSetIterator = _container.GetItemQueryIterator<EmailListDto>(queryString);
+                
                 while (resultSetIterator.HasMoreResults)
                 {
                     int count = 0;
                     var currentResultSet = await resultSetIterator.ReadNextAsync();
                     CampaignContact campaignContact = null;
+
                     foreach (var item in currentResultSet)
                     {
                         if (count == 0)
@@ -134,11 +136,11 @@ namespace CampaignMailer
                                 ReplyToEmailAddress = emailBlobContent.ReplyToEmailAddress,
                             };
                         }
-
+                        count++;
                         //campaignContact.EmailAddresses.Add(new EmailAddress(item.RecipientEmailAddress, string.Empty));
                         campaignContact.EmailAddresses.Add(new EmailAddress($"loadtest-{Guid.NewGuid()}@azurecomm-dev.net",string.Empty));
 
-                        count++;
+                       
 
                         if (count == _numRecipientsPerRequest)
                         {
@@ -147,21 +149,19 @@ namespace CampaignMailer
                             await UpdateStatusInCosomsDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
 
                             await Mailer.SendAsync(campaignContact);
-
-                                                                                
+                                                                                                            
                             campaignContact = null;
                             count = 0;
                             
                         }
                     }
 
-                    if (count < _numRecipientsPerRequest)
+                    if (count < _numRecipientsPerRequest && campaignContact != null)
                     {
                         // send email
                         log.LogInformation($"Processing email record for {count} recipients");
                         await UpdateStatusInCosomsDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
-                        await Mailer.SendAsync(campaignContact);
-                        
+                        await Mailer.SendAsync(campaignContact);                        
                     }
 
                 }
