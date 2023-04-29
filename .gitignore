@@ -348,3 +348,7 @@ MigrationBackup/
 
 # Ionide (cross platform F# VS Code tools) working folder
 .ionide/
+**/Properties/serviceDependencies.* - Zip Deploy.json
+**/Properties/ServiceDependencies/* - Zip Deploy/appInsights2.arm.json
+**/Properties/ServiceDependencies/* - Zip Deploy/profile.arm.json
+**/Properties/ServiceDependencies/* - Zip Deploy/profile.arm.json
