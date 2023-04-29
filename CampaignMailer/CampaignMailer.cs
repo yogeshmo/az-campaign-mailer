@@ -137,9 +137,8 @@ namespace CampaignMailer
                             };
                         }
                         count++;
-                        //campaignContact.EmailAddresses.Add(new EmailAddress(item.RecipientEmailAddress, string.Empty));
-                        campaignContact.EmailAddresses.Add(new EmailAddress($"loadtest-{Guid.NewGuid()}@azurecomm-dev.net",string.Empty));
-
+                        
+                        campaignContact.EmailAddresses.Add(new EmailAddress(item.RecipientEmailAddress, string.Empty));
                        
 
                         if (count == _numRecipientsPerRequest)
