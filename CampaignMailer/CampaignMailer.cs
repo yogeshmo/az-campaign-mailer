@@ -90,23 +90,19 @@ namespace CampaignMailer
             Mailer.Initialize(log);
 
             var campaignRequest = context.GetInput<CampaignRequest>();
-            var emailBlobContent = await ReadEmailContentFromBlobStream(campaignRequest.CampaignId);
-
-            var tasks = new List<Task>(); 
-            tasks.Add(Task.Run(() => SendMessageAsync(log, campaignRequest,emailBlobContent)));
-            //tasks.Add(Task.Run(() => SendMessageAsync(log, campaignRequest,emailBlobContent)));
-            //tasks.Add(Task.Run(() => SendMessageAsync(log, campaignRequest,emailBlobContent)));
-            //tasks.Add(Task.Run(() => SendMessageAsync(log, campaignRequest,emailBlobContent)));
-            //tasks.Add(Task.Run(() => SendMessageAsync(log, campaignRequest,emailBlobContent)));
-            await Task.WhenAll(tasks);
+            
+            await SendMessageAsync(log, campaignRequest);
 
         }
 
-        private async Task SendMessageAsync(ILogger log, CampaignRequest campaignRequest, BlobDto emailBlobContent)
+        private async Task SendMessageAsync(ILogger log, CampaignRequest campaignRequest)
         {
             try
             {
+                var emailBlobContent = await ReadEmailContentFromBlobStream(campaignRequest.CampaignId);
+
                 var queryString = string.Empty;
+
                 if (campaignRequest.SendOnlyToNewRecipients)
                 {
                     queryString = $"SELECT * FROM c WHERE c.partitionKey = '{campaignRequest.CampaignId}' AND c.status = 'NotStarted'";
@@ -117,7 +113,7 @@ namespace CampaignMailer
                 }
 
                 var query = new QueryDefinition(queryString);
-
+                //var tasks = new List<Task>();
                 using var resultSetIterator = _container.GetItemQueryIterator<EmailListDto>(queryString);
                 while (resultSetIterator.HasMoreResults)
                 {
@@ -139,29 +135,39 @@ namespace CampaignMailer
                             };
                         }
 
-                        campaignContact.EmailAddresses.Add(new EmailAddress(item.RecipientEmailAddress, string.Empty));
+                        //campaignContact.EmailAddresses.Add(new EmailAddress(item.RecipientEmailAddress, string.Empty));
+                        campaignContact.EmailAddresses.Add(new EmailAddress($"loadtest-{Guid.NewGuid()}@azurecomm-dev.net",string.Empty));
+
                         count++;
 
                         if (count == _numRecipientsPerRequest)
                         {
+                            log.LogInformation($"Processing email record for {_numRecipientsPerRequest} recipients");
                             // send email
                             await UpdateStatusInCosomsDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
-                            // await Mailer.SendAsync(campaignContact);
 
+                            await Mailer.SendAsync(campaignContact);
+
+                                                                                
                             campaignContact = null;
                             count = 0;
-                            log.LogInformation($"Processing email record for {_numRecipientsPerRequest} recipients");
+                            
                         }
                     }
 
                     if (count < _numRecipientsPerRequest)
                     {
                         // send email
-                        await UpdateStatusInCosomsDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
-                        // await Mailer.SendAsync(campaignContact);
                         log.LogInformation($"Processing email record for {count} recipients");
+                        await UpdateStatusInCosomsDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
+                        await Mailer.SendAsync(campaignContact);
+                        
                     }
+
                 }
+
+                //await Task.WhenAll(tasks);
+
             }
             catch (Exception ex)
             {
