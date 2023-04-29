@@ -14,5 +14,6 @@
         "maxConcurrentCalls": 32
       }
     }
-  }
+  },
+  "functionTimeout": "-1"
 }
