@@ -8,17 +8,10 @@ namespace EmailTelemetryProcessingService.Models
 {
     public class Record
     {
-        public DateTime time { get; set; }
-        public string resourceId { get; set; }
-        public string location { get; set; }
-        public string operationName { get; set; }
-        public string operationVersion { get; set; }
-        public string category { get; set; }
-        public Properties properties { get; set; }
-        public string correlationId { get; set; }
-        public string resourceGroup { get; set; }
-        public string resourceName { get; set; }
-        public string resourceType { get; set; }
-        public string subscriptionId { get; set; }
+        public string Sender { get; set; }
+        public string Recipient { get; set; }
+        public string MessageId { get; set; }
+        public string Status { get; set; }
+        public DateTime DeliveryAttemptTimestamp { get; set; }
     }
 }
