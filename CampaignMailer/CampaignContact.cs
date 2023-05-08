@@ -13,7 +13,7 @@ namespace CampaignMailer
     /// </summary>
     public class CampaignContact
     {
-        public List<EmailAddress> EmailAddresses { get; set; } = new List<EmailAddress>();  // email address, full name tuple
+        public HashSet<EmailAddress> EmailAddresses { get; set; } = new HashSet<EmailAddress>();  // email address, full name tuple
 
         public string ReplyToEmailAddress { get; set; }
 

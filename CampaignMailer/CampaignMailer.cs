@@ -11,7 +11,9 @@ using Microsoft.WindowsAzure.Storage.Blob;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
@@ -25,13 +27,15 @@ namespace CampaignMailer
         private string _databaseName;
         private string _containerName;
         private readonly IConfiguration _configuration;
-
+        private readonly CosmosClientOptions _options;
         private readonly int _numRecipientsPerRequest = 50;
 
         public CampaignMailer(IConfiguration configuration)
         {
             _configuration = configuration;
-            _cosmosClient = new CosmosClient(configuration["COSMOSDB_CONNECTION_STRING"]);
+            _options = new CosmosClientOptions() { AllowBulkExecution = true};
+
+            _cosmosClient = new CosmosClient(configuration["COSMOSDB_CONNECTION_STRING"], _options);
             _databaseName = "Campaign";
             _containerName = "EmailList";
             _container = _cosmosClient.GetContainer(_databaseName, _containerName);
@@ -113,7 +117,7 @@ namespace CampaignMailer
                 }
 
                 var query = new QueryDefinition(queryString);
-                //var tasks = new List<Task>();
+               
                 using var resultSetIterator = _container.GetItemQueryIterator<EmailListDto>(queryString);
                 
                 while (resultSetIterator.HasMoreResults)
@@ -138,7 +142,10 @@ namespace CampaignMailer
                         }
                         count++;
                         
-                        campaignContact.EmailAddresses.Add(new EmailAddress(item.RecipientEmailAddress, string.Empty));
+                        if(campaignContact.EmailAddresses.Add(new EmailAddress(item.RecipientEmailAddress, string.Empty)) == false) 
+                        {
+                            log.LogInformation($"Duplicate email record for {item.RecipientEmailAddress} in recipients List");
+                        }
                        
 
                         if (count == _numRecipientsPerRequest)
@@ -162,11 +169,7 @@ namespace CampaignMailer
                         await UpdateStatusInCosomsDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
                         await Mailer.SendAsync(campaignContact);                        
                     }
-
                 }
-
-                //await Task.WhenAll(tasks);
-
             }
             catch (Exception ex)
             {
@@ -174,7 +177,7 @@ namespace CampaignMailer
             }
         }
 
-        private async Task UpdateStatusInCosomsDBForRecipients(List<EmailAddress> recipients, string campaignId)
+        private async Task UpdateStatusInCosomsDBForRecipients(HashSet<EmailAddress> recipients, string campaignId)
         {
             List<Task> updateDbTasks = new List<Task>();
             foreach (var recipient in recipients)

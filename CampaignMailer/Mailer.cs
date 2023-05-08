@@ -43,7 +43,7 @@ namespace CampaignMailer
 
                 // Create the email message TO distribution list
 
-                var emailRecipients = new EmailRecipients(null, null, campaignContact.EmailAddresses);
+                EmailRecipients emailRecipients = new EmailRecipients(null, null, (IEnumerable<EmailAddress>)campaignContact.EmailAddresses);
 
                 EmailMessage emailMessage = new(campaignContact.SenderEmailAddress, emailRecipients, emailContent);
                 emailMessage.ReplyTo.Add(new EmailAddress(campaignContact.ReplyToEmailAddress, campaignContact.ReplyToDisplayName));
