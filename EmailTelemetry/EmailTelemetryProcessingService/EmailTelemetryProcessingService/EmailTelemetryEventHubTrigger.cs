@@ -68,10 +68,18 @@ namespace EmailTelemetryProcessingService
             // Once processing of the batch is complete, if any messages in the batch failed processing throw an exception so that there is a record of the failure.
 
             if (exceptions.Count > 1)
-                throw new AggregateException(exceptions);
+            {
+                var ex = new AggregateException(exceptions);
+                log.LogError($"{ex}");
+                throw ex;
+            }
 
             if (exceptions.Count == 1)
-                throw exceptions.Single();
+            {
+                var ex = exceptions.Single();
+                log.LogError($"{ex}");
+                throw ex;
+            }
         }
     }
 }
