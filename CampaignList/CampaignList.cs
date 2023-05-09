@@ -164,7 +164,7 @@ namespace CampaignList
                             // Add the pagination attributes to the XML query.
                             string currQueryXml = AddPaginationAttributes(queryXml, pagingCookie, pageNumber, pageSize);
 
-                            // Excute the fetch query and get the results in XML format.
+                            // Execute the fetch query and get the results in XML format.
                             RetrieveMultipleRequest fetchRequest = new()
                             {
                                 Query = new FetchExpression(currQueryXml)
