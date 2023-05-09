@@ -142,7 +142,7 @@ namespace CampaignMailer
                         }
                         count++;
                         
-                        if(campaignContact.EmailAddresses.Add(new EmailAddress(item.RecipientEmailAddress, string.Empty)) == false) 
+                        if(campaignContact.EmailAddresses.Add(item.RecipientEmailAddress) == false) 
                         {
                             log.LogInformation($"Duplicate email record for {item.RecipientEmailAddress} in recipients List");
                         }
@@ -152,7 +152,7 @@ namespace CampaignMailer
                         {
                             log.LogInformation($"Processing email record for {_numRecipientsPerRequest} recipients");
                             // send email
-                            await UpdateStatusInCosomsDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
+                            await UpdateStatusInCosmosDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
 
                             await Mailer.SendAsync(campaignContact);
                                                                                                             
@@ -166,7 +166,7 @@ namespace CampaignMailer
                     {
                         // send email
                         log.LogInformation($"Processing email record for {count} recipients");
-                        await UpdateStatusInCosomsDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
+                        await UpdateStatusInCosmosDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
                         await Mailer.SendAsync(campaignContact);                        
                     }
                 }
@@ -177,15 +177,15 @@ namespace CampaignMailer
             }
         }
 
-        private async Task UpdateStatusInCosomsDBForRecipients(HashSet<EmailAddress> recipients, string campaignId)
+        private async Task UpdateStatusInCosmosDBForRecipients(HashSet<string> recipients, string campaignId)
         {
-            List<Task> updateDbTasks = new List<Task>();
+            List<Task> updateDbTasks = new();
             foreach (var recipient in recipients)
             {
                 var emailListDto = new EmailListDto()
                 {
-                    RecipientEmailAddress = recipient.Address,
-                    RecipientFullName = recipient.DisplayName,
+                    RecipientEmailAddress = recipient,
+                    RecipientFullName = string.Empty,
                     Status = DeliveryStatus.InProgress.ToString(),
                     CampaignId = campaignId,
                 };

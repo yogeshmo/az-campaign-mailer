@@ -2,11 +2,9 @@
 using Azure.Communication.Email;
 using Microsoft.Extensions.Logging;
 using System;
-using System.Collections;
-using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using static System.Formats.Asn1.AsnWriter;
 
 namespace CampaignMailer
 {
@@ -43,7 +41,7 @@ namespace CampaignMailer
 
                 // Create the email message TO distribution list
 
-                EmailRecipients emailRecipients = new EmailRecipients(null, null, (IEnumerable<EmailAddress>)campaignContact.EmailAddresses);
+                EmailRecipients emailRecipients = new(null, null, campaignContact.EmailAddresses.Select(address => new EmailAddress(address, string.Empty)));
 
                 EmailMessage emailMessage = new(campaignContact.SenderEmailAddress, emailRecipients, emailContent);
                 emailMessage.ReplyTo.Add(new EmailAddress(campaignContact.ReplyToEmailAddress, campaignContact.ReplyToDisplayName));
