@@ -61,6 +61,7 @@ namespace EmailTelemetryProcessingService
                 }
                 catch (Exception e)
                 {
+                    log.LogError($"{e}");
                     exceptions.Add(e);
                 }
             }
@@ -69,16 +70,12 @@ namespace EmailTelemetryProcessingService
 
             if (exceptions.Count > 1)
             {
-                var ex = new AggregateException(exceptions);
-                log.LogError($"{ex}");
-                throw ex;
+                throw new AggregateException(exceptions);
             }
 
             if (exceptions.Count == 1)
             {
-                var ex = exceptions.Single();
-                log.LogError($"{ex}");
-                throw ex;
+                throw exceptions.Single();;
             }
         }
     }

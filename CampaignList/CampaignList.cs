@@ -159,7 +159,7 @@ namespace CampaignList
                     bool morePages = true;
                     try
                     {
-                        while (morePages)
+                        while (morePages && totalContactCount < 10000)
                         {
                             // Add the pagination attributes to the XML query.
                             string currQueryXml = AddPaginationAttributes(queryXml, pagingCookie, pageNumber, pageSize);
