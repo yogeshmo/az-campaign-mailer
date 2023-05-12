@@ -16,10 +16,12 @@ namespace EmailTelemetryProcessingService
         private readonly CosmosClient _cosmosClient;
         private readonly Container _container;
         private readonly string _partitionKey;
+        private readonly CosmosClientOptions _options;
 
         public EmailTelemetryEventHubTrigger(IConfiguration configuration)
         {
-            _cosmosClient = new CosmosClient(configuration["COSMOSDB_CONNECTION_STRING"]);
+            _options = new CosmosClientOptions() { AllowBulkExecution = true };
+            _cosmosClient = new CosmosClient(configuration["COSMOSDB_CONNECTION_STRING"], _options);
             _partitionKey = "newslettercampaign";
             _container = _cosmosClient.GetContainer("Campaign", "EmailList");
         }
@@ -28,6 +30,7 @@ namespace EmailTelemetryProcessingService
         public async Task Run([EventHubTrigger("email-telemetry-eventhub", Connection = "EVENT_HUB_CONNECTION_STRING")] string[] eventMessages, ILogger log)
         {
             var exceptions = new List<Exception>();
+            List<Task> updateDbTasks = new();
 
             foreach (var eventMessage in eventMessages)
             {
@@ -40,24 +43,11 @@ namespace EmailTelemetryProcessingService
                         if (eventRecord.EventType.Equals("Microsoft.Communication.EmailDeliveryReportReceived"))
                         {
                             log.LogInformation($"ACS Email - Correlation ID : {eventRecord.Data.MessageId} - DeliveryStatus - {eventRecord.Data.Status}");
-
-                            try
-                            {
-                                var response = await _container.ReadItemAsync<EmailListDto>(eventRecord.Data.Recipient, new PartitionKey(_partitionKey));
-                                var oldItem = response.Resource;
-
-                                oldItem.Status = "Completed";
-
-                                await _container.ReplaceItemAsync(oldItem, eventRecord.Data.Recipient, new PartitionKey(_partitionKey));
-                            }
-                            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-                            {
-                                throw new Exception($"Item {eventRecord.Data.Recipient} not found for this Campaign {_partitionKey}");
-                            }
+                            updateDbTasks.Add(ReadAndUpdateDbAsync(eventRecord));
                         }
 
                     }
-                    await Task.Yield();
+                    //await Task.Yield();
                 }
                 catch (Exception e)
                 {
@@ -65,6 +55,8 @@ namespace EmailTelemetryProcessingService
                     exceptions.Add(e);
                 }
             }
+
+            await Task.WhenAll(updateDbTasks);
 
             // Once processing of the batch is complete, if any messages in the batch failed processing throw an exception so that there is a record of the failure.
 
@@ -76,6 +68,23 @@ namespace EmailTelemetryProcessingService
             if (exceptions.Count == 1)
             {
                 throw exceptions.Single();;
+            }
+        }
+
+        private async Task ReadAndUpdateDbAsync(EventRecord eventRecord)
+        {
+            try
+            {
+                var response = await _container.ReadItemAsync<EmailListDto>(eventRecord.Data.Recipient, new PartitionKey(_partitionKey));
+                var oldItem = response.Resource;
+
+                oldItem.Status = "Completed";
+
+                await _container.ReplaceItemAsync(oldItem, eventRecord.Data.Recipient, new PartitionKey(_partitionKey));
+            }
+            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                throw new Exception($"Item {eventRecord.Data.Recipient} not found for this Campaign {_partitionKey}");
             }
         }
     }
