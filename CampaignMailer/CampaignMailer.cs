@@ -1,14 +1,12 @@
 using Azure.Communication.Email;
 using CampaignList;
-using Microsoft.Azure.Cosmos;
+using Microsoft.Azure.ServiceBus;
 using Microsoft.Azure.WebJobs;
-using Microsoft.Azure.WebJobs.Extensions.DurableTask;
-using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.WindowsAzure.Storage;
 using Microsoft.WindowsAzure.Storage.Blob;
-using Newtonsoft.Json;
+using System.Text.Json;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -17,28 +15,26 @@ using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading.Tasks;
+using Azure;
+using System.Threading;
 
 namespace CampaignMailer
 {
     public class CampaignMailer
     {
-        private readonly CosmosClient _cosmosClient;
-        private readonly Microsoft.Azure.Cosmos.Container _container;
-        private string _databaseName;
-        private string _containerName;
         private readonly IConfiguration _configuration;
-        private readonly CosmosClientOptions _options;
-        private readonly int _numRecipientsPerRequest = 50;
+        private readonly EmailClient emailClient;
+        private readonly int _numRecipientsPerRequest;
+        private readonly string campaignId;
+        private readonly string storageConnectionString;
 
         public CampaignMailer(IConfiguration configuration)
         {
+            emailClient = new EmailClient(configuration.GetConnectionStringOrSetting("ACSEmail"));
+            campaignId = configuration.GetValue<string>("CampaignId");
+            _numRecipientsPerRequest = configuration.GetValue<int>("NumRecipientsPerRequest");
+            storageConnectionString = configuration.GetConnectionStringOrSetting("AzureBlobStorageConnection");
             _configuration = configuration;
-            _options = new CosmosClientOptions() { AllowBulkExecution = true};
-
-            _cosmosClient = new CosmosClient(configuration["COSMOSDB_CONNECTION_STRING"], _options);
-            _databaseName = "Campaign";
-            _containerName = "EmailList";
-            _container = _cosmosClient.GetContainer(_databaseName, _containerName);
         }
 
         /// <summary>
@@ -48,159 +44,87 @@ namespace CampaignMailer
         /// <param name="client">The Durable Function orchestration client.</param>
         /// <param name="log">The logger instance used to log messages and status.</param>
         /// <returns>The URLs to check the status of the function.</returns>
-        [FunctionName("CampaignMailerHttpStart")]
-        public static async Task<HttpResponseMessage> HttpStart(
-           [HttpTrigger(AuthorizationLevel.Anonymous, "get", "post", Route = "startCampaignMailer")] HttpRequestMessage req,
-           [DurableClient] IDurableOrchestrationClient client,
-           ILogger log)
+        [FunctionName("CampaignMailerSBTrigger")]
+        public async Task Run([ServiceBusTrigger("acsmails", Connection = "AzureServiceBus")] Message[] messageList, ILogger log)
         {
-            log.LogInformation($"Starting Sending Email Campaign");
+            log.LogInformation("Starting Sending Email Campaign");
 
-            try
+            var tasks = new List<Task>();
+            var recipientsList = new List<EmailAddress>();
+
+            var emailBlobContent = await ReadEmailContentFromBlobStream(campaignId);
+
+            var campaignContact = new CampaignContact
             {
-                // Get the campaign information from the HTTP request body
-                CampaignRequest campaignRequest = await req.Content.ReadAsAsync<CampaignRequest>();
-
-                // Function input comes from the request content.
-                string instanceId = await client.StartNewAsync("CampaignListOrchestrator", campaignRequest);
-
-                log.LogInformation($"Started orchestration with ID = '{instanceId}", instanceId);
-
-                // Create the URL to allow the client to check status of a request (excluding the function key in the code querystring)
-                string checkStatusUrl = string.Format("{0}://{1}:{2}/campaign/CampaignListHttpStart_Status?id={3}", req.RequestUri.Scheme, req.RequestUri.Host, req.RequestUri.Port, instanceId);
-
-                // Create the response and add headers
-                var response = new HttpResponseMessage()
+                EmailContent = new EmailContent(emailBlobContent.MessageSubject)
                 {
-                    StatusCode = System.Net.HttpStatusCode.Accepted,
-                    Content = new StringContent(checkStatusUrl),
-                };
-                response.Headers.Add("Location", checkStatusUrl);
-                response.Headers.Add("Retry-After", "10");
+                    Html = emailBlobContent.MessageBodyHtml,
+                    PlainText = emailBlobContent.MessageBodyPlainText
+                },
+                ReplyTo = new EmailAddress(emailBlobContent.ReplyToEmailAddress, emailBlobContent.ReplyToDisplayName),
+                SenderEmailAddress = emailBlobContent.SenderEmailAddress
+            };
 
-                return response;
+            for (int i = 0; i < messageList.Length; i++)
+            {
+                var message = messageList[i];
+                var messageBody = Encoding.UTF8.GetString(message.Body);
+                var customer = JsonSerializer.Deserialize<EmailListDto>(messageBody);
+
+                recipientsList.Add(new EmailAddress(customer.RecipientEmailAddress));
+
+                if (recipientsList.Count == _numRecipientsPerRequest || (i == messageList.Length - 1))
+                {
+                    EmailRecipients recipients = new EmailRecipients(bcc: recipientsList);
+
+                    tasks.Add(SendEmailAsync(campaignContact, recipients, log));
+                }
             }
-            catch (Exception)
-            {
-                throw;
-            }                       
+
+            await Task.WhenAll(tasks);
         }
 
-        [FunctionName("CampaignListOrchestrator")]
-        public async Task RunOrchestrator(
-            [OrchestrationTrigger] IDurableOrchestrationContext context,
-            ILogger log)
-        {
-            Mailer.Initialize(log);
-
-            var campaignRequest = context.GetInput<CampaignRequest>();
-            
-            await SendMessageAsync(log, campaignRequest);
-
-        }
-
-        private async Task SendMessageAsync(ILogger log, CampaignRequest campaignRequest)
+        private async Task SendEmailAsync(CampaignContact campaignContact, EmailRecipients recipients, ILogger log)
         {
             try
             {
-                var emailBlobContent = await ReadEmailContentFromBlobStream(campaignRequest.CampaignId);
+                log.LogInformation("Sending email...");
 
-                var queryString = string.Empty;
+                EmailMessage message = new EmailMessage(
+                    campaignContact.SenderEmailAddress,
+                    recipients,
+                    campaignContact.EmailContent);
 
-                if (campaignRequest.SendOnlyToNewRecipients)
-                {
-                    queryString = $"SELECT * FROM c WHERE c.campaignId = '{campaignRequest.CampaignId}' AND c.status = 'NotStarted'";
-                }
-                else
-                {
-                    queryString = $"SELECT * FROM c WHERE c.campaignId = '{campaignRequest.CampaignId}' AND c.status = 'InProgress'";
-                }
+                message.Headers.Add("x-ms-acsemail-loadtest-skip-email-delivery", "ACS");
 
-                var query = new QueryDefinition(queryString);
-               
-                using var resultSetIterator = _container.GetItemQueryIterator<EmailListDto>(queryString);
-                
-                while (resultSetIterator.HasMoreResults)
-                {
-                    int count = 0;
-                    var currentResultSet = await resultSetIterator.ReadNextAsync();
-                    CampaignContact campaignContact = null;
+                var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
 
-                    foreach (var item in currentResultSet)
-                    {
-                        if (count == 0)
-                        {
-                            campaignContact = new CampaignContact()
-                            {
-                                SenderEmailAddress = emailBlobContent.SenderEmailAddress,
-                                MessageBodyHtml = emailBlobContent.MessageBodyHtml,
-                                MessageSubject = emailBlobContent.MessageSubject,
-                                MessageBodyPlainText = emailBlobContent.MessageBodyPlainText,
-                                ReplyToDisplayName = emailBlobContent.ReplyToDisplayName,
-                                ReplyToEmailAddress = emailBlobContent.ReplyToEmailAddress,
-                            };
-                        }
-                        count++;
-                        
-                        if(campaignContact.EmailAddresses.Add(item.RecipientEmailAddress) == false) 
-                        {
-                            log.LogInformation($"Duplicate email record for {item.RecipientEmailAddress} in recipients List");
-                        }
-                       
+                EmailSendOperation emailSendOperation = await emailClient.SendAsync(Azure.WaitUntil.Started, message, cts.Token);
 
-                        if (count == _numRecipientsPerRequest)
-                        {
-                            log.LogInformation($"Processing email record for {_numRecipientsPerRequest} recipients");
-                            // send email
-                            await UpdateStatusInCosmosDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
-
-                            await Mailer.SendAsync(campaignContact);
-                                                                                                            
-                            campaignContact = null;
-                            count = 0;
-                            
-                        }
-                    }
-
-                    if (count < _numRecipientsPerRequest && campaignContact != null)
-                    {
-                        // send email
-                        log.LogInformation($"Processing email record for {count} recipients");
-                        await UpdateStatusInCosmosDBForRecipients(campaignContact.EmailAddresses, campaignRequest.CampaignId);
-                        await Mailer.SendAsync(campaignContact);                        
-                    }
-                }
+                /// Get the OperationId so that it can be used for tracking the message for troubleshooting
+                string operationId = emailSendOperation.Id;
+                log.LogInformation($"Email operation id = {operationId}");
+            }
+            catch (RequestFailedException ex)
+            {
+                /// OperationID is contained in the exception message and can be used for troubleshooting purposes
+                log.LogError($"Email send operation failed with error code: {ex.ErrorCode}, message: {ex.Message}");
+            }
+            catch (OperationCanceledException ocex)
+            {
+                log.LogError($"Timeout Exception while sending email - {ocex}");
             }
             catch (Exception ex)
             {
-                log.LogError($"orchestrator failed with exception {ex}");
+                log.LogError($"Exception while sending email - {ex}");
             }
-        }
-
-        private async Task UpdateStatusInCosmosDBForRecipients(HashSet<string> recipients, string campaignId)
-        {
-            List<Task> updateDbTasks = new();
-            foreach (var recipient in recipients)
-            {
-                var emailListDto = new EmailListDto()
-                {
-                    RecipientEmailAddress = recipient,
-                    RecipientFullName = string.Empty,
-                    Status = DeliveryStatus.InProgress.ToString(),
-                    CampaignId = campaignId,
-                };
-
-                updateDbTasks.Add(_container.UpsertItemAsync(emailListDto, new PartitionKey(emailListDto.CampaignId)));
-            }
-
-            await Task.WhenAll(updateDbTasks);
         }
 
         private CloudBlob GetBlobContent(string campaignId)
         {
             var blobName = campaignId + ".json";
             var blobContainerName = "campaigns";
-            var blobConnectionString = _configuration["AzureWebJobsStorage"];
+            var blobConnectionString = storageConnectionString;// _configuration["AzureWebJobsStorage"];
 
             // Create a CloudStorageAccount object from the connection string
             CloudStorageAccount storageAccount = CloudStorageAccount.Parse(blobConnectionString);
@@ -226,7 +150,7 @@ namespace CampaignMailer
 
             try
             {
-                var blobContentDeSerialized = JsonConvert.DeserializeObject<BlobDto>(blobContentSerializedString);
+                var blobContentDeSerialized = JsonSerializer.Deserialize<BlobDto>(blobContentSerializedString);
                 return blobContentDeSerialized;
             }
             catch (Exception)

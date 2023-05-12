@@ -2,7 +2,7 @@
   "profiles": {
     "CampaignMailer": {
       "commandName": "Project",
-      "commandLineArgs": "--port 7063",
+      "commandLineArgs": "--port 7235",
       "launchBrowser": false
     }
   }
