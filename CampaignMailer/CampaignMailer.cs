@@ -72,12 +72,15 @@ namespace CampaignMailer
                 var customer = JsonSerializer.Deserialize<EmailListDto>(messageBody);
 
                 recipientsList.Add(new EmailAddress(customer.RecipientEmailAddress));
+                log.LogInformation($"Adding {customer.RecipientEmailAddress}");
 
                 if (recipientsList.Count == _numRecipientsPerRequest || (i == messageList.Length - 1))
                 {
                     EmailRecipients recipients = new EmailRecipients(bcc: recipientsList);
 
                     tasks.Add(SendEmailAsync(campaignContact, recipients, log));
+
+                    recipientsList.Clear();
                 }
             }
 
