@@ -1,108 +1,41 @@
 param deploymentId string
+param dataverseConnectionString string
 param location string = resourceGroup().location
 
-// Deploy CosmosDB
-resource campaignCosmosDbAccount 'Microsoft.DocumentDB/databaseAccounts@2023-04-15' = {
-  name: 'campaign-list-cosmos-account-${deploymentId}'
+// Deploy Service Bus
+resource serviceBusNamespace 'Microsoft.ServiceBus/namespaces@2022-10-01-preview' = {
+  name: 'service-bus-namespace-${deploymentId}'
   location: location
-  properties: {
-    databaseAccountOfferType: 'Standard'
-    locations: [
-      {
-        locationName: 'West US'
-        failoverPriority: 0
-      }
-    ]
-  }
-}
-
-resource campaignCosmosDbDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2023-04-15' = {
-  parent: campaignCosmosDbAccount
-  name: 'Campaign'
-  properties: {
-    resource: {
-      id: 'Campaign'
-    }
-  }
-}
-
-resource campaignCosmosDbContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2023-04-15' = {
-  parent: campaignCosmosDbDatabase
-  name: 'EmailList'
-  properties: {
-    resource: {
-      id: 'EmailList'
-      partitionKey: {
-        paths: [
-          '/campaignId'
-        ]
-        kind: 'Hash'
-        version: 2
-      }
-      
-    }
-    options: {
-      autoscaleSettings: {
-        maxThroughput: 80000
-      }
-    }
-  }
-}
-
-
-// Deploy Storage Account
-resource campaignStorageAccount 'Microsoft.Storage/storageAccounts@2021-04-01' = {
-  name: 'campaignsa${deploymentId}'
-  location: location
-  kind: 'StorageV2'
   sku: {
-    name: 'Standard_LRS'
+    name: 'Standard'
+    tier: 'Standard'
   }
+}
+
+resource serviceBusContactListQueue 'Microsoft.ServiceBus/namespaces/queues@2022-10-01-preview' = {
+  parent: serviceBusNamespace
+  name: 'contactlist'
   properties: {
-    accessTier: 'Hot'
+    status: 'Active'
+    maxDeliveryCount: 10
+    maxSizeInMegabytes: 5120
+    maxMessageSizeInKilobytes: 256
+    requiresDuplicateDetection: true
+    requiresSession: false
+    defaultMessageTimeToLive: 'P14D'
+    deadLetteringOnMessageExpiration: false
+    enableBatchedOperations: true
+    autoDeleteOnIdle: 'P10675199DT2H48M5.4775807S'
+    duplicateDetectionHistoryTimeWindow: 'P1DT10M'
+    lockDuration: 'PT5M'
+    enablePartitioning: false
+    enableExpress: false
   }
 }
 
-resource campaignBlobStorageService 'Microsoft.Storage/storageAccounts/blobServices@2022-09-01' = {
-  parent: campaignStorageAccount
-  name: 'default'
-}
-
-resource campainBlobStorageContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2022-09-01' = {
-  parent: campaignBlobStorageService
-  name: 'campaign'
-}
-
-
-// Deploy Campaign List Function App
-module campaignList './campaignlist.bicep' = {
-  name: 'campaignList'
-  params: {
-    campaignCosmosDbAccountConnectionString: campaignCosmosDbAccount.listConnectionStrings().connectionStrings[0].connectionString
-    campaignStorageAccountAccessKey: campaignStorageAccount.listKeys().keys[0].value
-    campaignStorageAccountName: campaignStorageAccount.name
-    dataverseConnectionString: '<insert-dataverse-connection-string-here>'
-    deploymentId: deploymentId
-    location: location
-  }
-}
-
-// Deploy Campaign Mailer Function App
-module campaignMailer 'campaignmailer.bicep' = {
-  name: 'campaignMailer'
-  params: {
-    campaignCosmosDbAccountConnectionString: campaignCosmosDbAccount.listConnectionStrings().connectionStrings[0].connectionString
-    campaignStorageAccountAccessKey: campaignStorageAccount.listKeys().keys[0].value
-    campaignStorageAccountName: campaignStorageAccount.name
-    communicationServiceConnectionString: campaignCommunicationService.listKeys().primaryConnectionString
-    deploymentId: deploymentId
-    location: location
-  }
-}
-
-// Deploy Communication Service
-resource campaignCommunicationService 'Microsoft.Communication/communicationServices@2023-03-31' = {
-  name: 'campaign-comm-service-${deploymentId}'
+// Deploy Email Resources
+resource communicationService 'Microsoft.Communication/communicationServices@2023-03-31' = {
+  name: 'comm-service-${deploymentId}'
   location: 'global'
   properties: {
     dataLocation: 'UnitedStates'
@@ -112,8 +45,8 @@ resource campaignCommunicationService 'Microsoft.Communication/communicationServ
   }
 }
 
-resource campaignEmailService 'Microsoft.Communication/emailServices@2023-03-31' = {
-  name: 'campaign-email-service-${deploymentId}'
+resource emailService 'Microsoft.Communication/emailServices@2023-03-31' = {
+  name: 'email-service-${deploymentId}'
   location: 'global'
   properties: {
     dataLocation: 'UnitedStates'
@@ -121,7 +54,7 @@ resource campaignEmailService 'Microsoft.Communication/emailServices@2023-03-31'
 }
 
 resource azureManagedDomain 'Microsoft.Communication/emailServices/domains@2023-03-31' = {
-  parent: campaignEmailService
+  parent: emailService
   name: 'AzureManagedDomain'
   location: 'global'
   properties: {
@@ -129,54 +62,69 @@ resource azureManagedDomain 'Microsoft.Communication/emailServices/domains@2023-
   }
 }
 
-// Deploy Event Grid
-resource campaignTelemetryEventHubNamespace 'Microsoft.EventHub/namespaces@2022-10-01-preview' = {
-  name: 'campaignTelemetryEventHubNamespace${deploymentId}'
+// Deploy Storage Account
+resource storageAccount 'Microsoft.Storage/storageAccounts@2022-09-01' = {
+  name: 'sa${deploymentId}'
   location: location
-}
-
-resource campaignTelemetryEventHub 'Microsoft.EventHub/namespaces/eventhubs@2022-10-01-preview' = {
-  parent: campaignTelemetryEventHubNamespace
-  name: 'campaign-telemetry-eventhub'
-}
-
-resource campaignTelemetrySystemTopic 'Microsoft.EventGrid/systemTopics@2022-06-15' = {
-  name: 'campaign-telemetry-system-topic-${deploymentId}'
-  location: 'global'
-  properties: {
-    source: campaignCommunicationService.id
-    topicType: 'Microsoft.Communication.CommunicationServices'
+  kind: 'StorageV2'
+  sku: {
+    name: 'Standard_LRS'
   }
 }
 
-resource campaignTelemetryEventSubscriptions 'Microsoft.EventGrid/systemTopics/eventSubscriptions@2022-06-15' = {
-  parent: campaignTelemetrySystemTopic
-  name: '${campaignTelemetrySystemTopic.name}-subscription'
+// Deploy Web App
+resource appServicePlan 'Microsoft.Web/serverfarms@2022-09-01' = {
+  name: 'app-service-plan-${deploymentId}'
+  location: location
+  kind: 'app'
+  sku: {
+    name: 'P1v3'
+    tier: 'PremiumV3'
+    size: 'P1v3'
+    family: 'Pv3'
+    capacity: 1
+  }
+}
+
+var serviceBusListKeysEndpoint = '${serviceBusNamespace.id}/AuthorizationRules/RootManageSharedAccessKey'
+var storageAccountName = storageAccount.name
+var storageAccountAccessKey = storageAccount.listKeys().keys[0].value
+
+resource webApp 'Microsoft.Web/sites@2022-09-01' = {
+  name: 'web-app-${deploymentId}'
+  location: location
+  kind: 'app'
   properties: {
-    destination: {
-      properties: {
-        resourceId: campaignTelemetryEventHub.id
-      }
-      endpointType: 'EventHub'
-    }
-    filter: {
-      includedEventTypes: [
-        'Microsoft.Communication.EmailEngagementTrackingReportReceived'
-        'Microsoft.Communication.EmailDeliveryReportReceived'
+    serverFarmId: appServicePlan.id
+    siteConfig: {
+      appSettings: [
+        {
+          name: 'WEBSITE_RUN_FROM_PACKAGE'
+          value: '1'
+        }
+      ]
+      connectionStrings: [
+        {
+          name: 'COMMUNICATIONSERVICES_CONNECTION_STRING'
+          connectionString: communicationService.listKeys().primaryConnectionString
+        }
+        {
+          name: 'DATAVERSE_CONNECTION_STRING'
+          connectionString: dataverseConnectionString
+        }
+        {
+          name: 'SERVICEBUS_CONNECTION_STRING'
+          connectionString: listKeys(serviceBusListKeysEndpoint, serviceBusNamespace.apiVersion).primaryConnectionString
+        }
+        {
+          name: 'STORAGE_CONNECTION_STRING'
+          connectionString: 'DefaultEndpointsProtocol=https;AccountName=${storageAccountName};AccountKey=${storageAccountAccessKey};EndpointSuffix=core.windows.net'
+        }
       ]
     }
   }
 }
 
-// Deploy Campaign Telemetry Function App
-module campaignTelemetry 'campaigntelemetry.bicep' = {
-  name: 'campaignTelemetry'
-  params: {
-    campaignCosmosDbAccountConnectionString: campaignCosmosDbAccount.listConnectionStrings().connectionStrings[0].connectionString
-    campaignStorageAccountAccessKey: campaignStorageAccount.listKeys().keys[0].value
-    campaignStorageAccountName: campaignStorageAccount.name
-    campaignTelemetryEventHubName: campaignTelemetryEventHub.name
-    deploymentId: deploymentId
-    location: location
-  }
-}
+// Outputs
+output communicationServiceId string = communicationService.id
+output webAppName string = webApp.name
